@@ -11,16 +11,19 @@ import (
 	"sync"
 )
 
-//客户端固定采用JSON编码Option 后序的header和body编码方式由Option中的CodecType指定
-//服务端首先使用JSON解码Option 然后通过Option的CodecType解码剩余的内容
-
 const MagicNumber = 0x3bef5c
 
+// invalidRequest is a placeholder for response argv when error occurs
 var invalidRequest = struct{}{}
 
+//Client use Json encode the Option and the encode method of
+//subsequent header and body is up to the Option
+//Server first decode the option and use the CodeType to
+//decode the subsequent header and body
+
 type Option struct {
-	MagicNumber int
-	CodecType   codec.Type
+	MagicNumber int        //marks this is a rpc request
+	CodecType   codec.Type //client can choose different Codec to encode body
 }
 
 type request struct {
@@ -28,42 +31,50 @@ type request struct {
 	argv, replyv reflect.Value
 }
 
-var DefaultOption = &Option{
+var DefaultOption = &Option{ //default option use the Gob to encode and decode information
 	MagicNumber: MagicNumber,
 	CodecType:   codec.GobType,
 }
 
+// Server represents a rpc server
 type Server struct{}
 
+// NewServer  returns a new Server
 func NewServer() *Server {
 	return &Server{}
 }
 
+// DefaultServer is the default instance of *Server
 var DefaultServer = NewServer()
 
+// Accept accepts connections on the listener
+// and serves requests for each incoming connection
 func (server *Server) Accept(lis net.Listener) {
 	for {
-		//循环等待socker建立连接 开启子协程处理
+		//wait the socket connecting and resolve
 		conn, err := lis.Accept()
 		if err != nil {
 			log.Println("rpc server:accept error:", err)
 			return
 		}
+		// use goroutine to resolve the connecting
 		go server.ServeConn(conn)
 	}
 }
 
 func Accept(lis net.Listener) { DefaultServer.Accept(lis) }
 
+// ServeConn runs the server on a single connection
+// ServeConn blocks,serving the connetcion until the client hangs up
 func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	defer func() { _ = conn.Close() }()
 	var opt Option
-	//通过json反序列化得到Option
+	//decode the option  and save it in the opt Option
 	if err := json.NewDecoder(conn).Decode(&opt); err != nil {
 		log.Println("rpc server:options error:", err)
 		return
 	}
-	//检查MagicNumber和CodeType的值是否正确
+	//check the magicnumber and CodecType is ok or not
 	if opt.MagicNumber != MagicNumber {
 		log.Printf("rpc server:invalid magic number %x", opt.MagicNumber)
 		return
@@ -73,26 +84,30 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 		log.Printf("rpc server:invalid codec type %s", opt.CodecType)
 		return
 	}
+	// use serveCodec to resolve the next
 	server.serveCodec(f(conn))
 }
 
 func (server *Server) serveCodec(cc codec.Codec) {
+	//a mutex to make sue to send a complete response
 	sending := new(sync.Mutex)
+	//wait until all request are handled
 	wg := new(sync.WaitGroup)
 	for {
-		//读取请求
+		//read the socket request
 		req, err := server.readRequest(cc)
 		if err != nil {
 			if req == nil {
 				break
 			}
 			req.h.Error = err.Error()
-			//回复请求 这里用锁保证报文逐个发送
+			//send response must use the lock because the response need
+			//be sent one by one
 			server.sendResponse(cc, req.h, invalidRequest, sending)
 			continue
 		}
 		wg.Add(1)
-		//处理请求
+		//concurrent processing handle the request
 		go server.handleRequest(cc, req, sending, wg)
 	}
 	wg.Wait()
@@ -101,6 +116,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 
 func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	var h codec.Header
+	// ReadHeader until EOF
 	if err := cc.ReadHeader(&h); err != nil {
 		if err != io.EOF && err != io.ErrUnexpectedEOF {
 			log.Println("rpc server:read header error:", err)
@@ -124,6 +140,7 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 }
 
 func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interface{}, sending *sync.Mutex) {
+	// use lock to make sure response one by one
 	sending.Lock()
 	defer sending.Unlock()
 	if err := cc.Write(h, body); err != nil {

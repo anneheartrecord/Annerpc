@@ -7,7 +7,8 @@ import (
 	"log"
 )
 
-// GobCodec 由一个通道一个缓冲一个编码器一个解码器组成
+// GobCodec contains a conn and a buf used in communication
+// and an encoder and decoder
 type GobCodec struct {
 	conn io.ReadWriteCloser
 	buf  *bufio.Writer
@@ -15,11 +16,13 @@ type GobCodec struct {
 	enc  *gob.Encoder
 }
 
-//检查结构体是否实现接口
+//check the GobCodec struct whether satisfied the Codec interface
 var _ Codec = (*GobCodec)(nil)
 
-// NewGobCodec 创建一个Gob类型的编解码器
+// NewGobCodec accept the io.ReadWriteCloser args and return a Codec interface
 func NewGobCodec(conn io.ReadWriteCloser) Codec {
+	// the connection has three  fields Reader Writer and Closer
+	// create a buf
 	buf := bufio.NewWriter(conn)
 	return &GobCodec{
 		conn: conn,
@@ -29,27 +32,32 @@ func NewGobCodec(conn io.ReadWriteCloser) Codec {
 	}
 }
 
-//实现方法
+//realize the three Methods of Codec and use the GobCodec be the receiver
 
 func (c *GobCodec) ReadHeader(h *Header) error {
-	return c.dec.Decode(h) //返回解码之后的头部
+	//return decoded header
+	return c.dec.Decode(h)
 }
 
 func (c *GobCodec) ReadBody(body interface{}) error {
-	return c.dec.Decode(body) //返回解码之后的body
+	//return decoded body
+	return c.dec.Decode(body)
 }
 
 func (c *GobCodec) Write(h *Header, body interface{}) (err error) {
 	defer func() {
-		_ = c.buf.Flush() //写入数据
+		// write the buf data
+		_ = c.buf.Flush()
 		if err != nil {
 			_ = c.Close()
 		}
 	}()
+	// encode the header
 	if err := c.enc.Encode(h); err != nil {
 		log.Println("rpc codec:gob error encoding header:", err)
 		return err
 	}
+	// encode the body
 	if err := c.enc.Encode(body); err != nil {
 		log.Println("rpc codec:gob error encoding body:", err)
 		return err
@@ -58,5 +66,6 @@ func (c *GobCodec) Write(h *Header, body interface{}) (err error) {
 }
 
 func (c *GobCodec) Close() error {
-	return c.conn.Close() //关闭通道
+	// close the connection
+	return c.conn.Close()
 }

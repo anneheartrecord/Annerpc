@@ -12,7 +12,7 @@ import (
 
 func startServer(addr chan string) {
 	// pick a free port
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", ":9999")
 	if err != nil {
 		log.Fatal("network error:", err)
 	}
@@ -23,9 +23,10 @@ func startServer(addr chan string) {
 
 func main() {
 	addr := make(chan string)
+	// start the Server
 	go startServer(addr)
 
-	// in fact, following code is like a simple geerpc client
+	// in fact, following code is like a simple annerpc client
 	conn, _ := net.Dial("tcp", <-addr)
 	defer func() { _ = conn.Close() }()
 
