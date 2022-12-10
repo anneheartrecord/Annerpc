@@ -2,48 +2,51 @@ package main
 
 import (
 	"Annerpc"
-	codec "Annerpc/codec"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net"
+	"sync"
 	"time"
 )
 
+type Foo int
+
+type Args struct{ Num1, Num2 int }
+
+func (f Foo) Sum(args Args, reply *int) error {
+	*reply = args.Num1 + args.Num2
+	return nil
+}
+
 func startServer(addr chan string) {
-	// pick a free port
-	l, err := net.Listen("tcp", ":9999")
-	if err != nil {
-		log.Fatal("network error:", err)
+	var foo Foo
+	if err := Annerpc.Register(&foo); err != nil {
+		
 	}
-	log.Println("start rpc server on", l.Addr())
-	addr <- l.Addr().String()
-	Annerpc.Accept(l)
 }
 
 func main() {
+	log.SetFlags(0)
 	addr := make(chan string)
 	// start the Server
 	go startServer(addr)
 
-	// in fact, following code is like a simple annerpc client
-	conn, _ := net.Dial("tcp", <-addr)
-	defer func() { _ = conn.Close() }()
-
+	client, _ := Annerpc.Dial("tcp", <-addr)
+	defer func() {
+		_ = client.Close()
+	}()
 	time.Sleep(time.Second)
-	// send options
-	_ = json.NewEncoder(conn).Encode(Annerpc.DefaultOption)
-	cc := codec.NewGobCodec(conn)
-	// send request & receive response
+	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
-		h := &codec.Header{
-			ServiceMethod: "Foo.Sum",
-			Seq:           uint64(i),
-		}
-		_ = cc.Write(h, fmt.Sprintf("geerpc req %d", h.Seq))
-		_ = cc.ReadHeader(h)
-		var reply string
-		_ = cc.ReadBody(&reply)
-		log.Println("reply:", reply)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := fmt.Sprintf("annerpc req %d", i)
+			var reply string
+			if err := client.Call("Foo.sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error:", err)
+			}
+			log.Println("reply:", reply)
+		}(i)
 	}
+	wg.Wait()
 }

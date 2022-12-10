@@ -146,7 +146,7 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	return newClientCodec(f(conn), opt), nil
 }
 
-// make a instance of Client
+// make an instance of Client
 func newClientCodec(cc codec.Codec, opt *Option) *Client {
 	client := &Client{
 		seq:     1, //seq starts with1,0 means invalid call
@@ -156,4 +156,91 @@ func newClientCodec(cc codec.Codec, opt *Option) *Client {
 	}
 	go client.receive()
 	return client
+}
+
+func parseOptions(opts ...*Option) (*Option, error) {
+	// if opts is nil or pass nil as parameter
+	if len(opts) == 0 || opts[0] == nil {
+		return DefaultOption, nil
+	}
+	if len(opts) != 1 {
+		return nil, errors.New("number of options is more than 1")
+	}
+	opt := opts[0]
+	opt.MagicNumber = DefaultOption.MagicNumber
+	if opt.CodecType == "" {
+		opt.CodecType = DefaultOption.CodecType
+	}
+	return opt, nil
+}
+
+// Dial connects to an RPC server at the specified network address
+func Dial(network, address string, opts ...*Option) (client *Client, err error) {
+	opt, err := parseOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.Dial(network, address)
+	if err != nil {
+		return nil, err
+	}
+	// if the client is nil,then close it
+	defer func() {
+		if client == nil {
+			_ = conn.Close()
+		}
+	}()
+	return NewClient(conn, opt)
+}
+
+// send the message to the server
+func (c *Client) send(call *Call) {
+	//make sure that the client will send a complete request
+	c.sending.Lock()
+	defer c.sending.Unlock()
+	//before send,register the call first
+	seq, err := c.registerCall(call)
+	if err != nil {
+		call.Error = err
+		call.done()
+		return
+	}
+	//prepare request header
+	c.header.ServiceMethod = call.ServiceMethod
+	c.header.Seq = seq
+	c.header.Error = ""
+	//encode and send the request
+	if err := c.cc.Write(&c.header, call.Args); err != nil {
+		call := c.removeCall(seq)
+		//call can be nil,it means tahrt write partically failed
+		if call != nil {
+			call.Error = err
+			call.done()
+		}
+	}
+}
+
+//Go invokes the function asynchronously
+//It returns the Call structure representing the invocation
+func (c *Client) Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call {
+	if done == nil {
+		done = make(chan *Call, 10)
+	} else if cap(done) == 0 {
+		log.Panic("rpc client:done channel is unbuffered")
+	}
+	call := &Call{
+		ServiceMethod: serviceMethod,
+		Args:          args,
+		Reply:         reply,
+		Done:          done,
+	}
+	c.send(call)
+	return call
+}
+
+// Call invokes the named function,waits for it to complete and returns its error status
+// it's a package of Go and it is a synchronous interface
+func (c *Client) Call(serviceMethod string, args, reply interface{}) error {
+	call := <-c.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
+	return call.Error
 }
