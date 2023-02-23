@@ -1,4 +1,7 @@
 # Quick Start
+
+
+```
 func main() {
 	log.SetFlags(0)
 	registryAddr := "http://localhost:9999/_anneeeeerpc_/registry"
@@ -17,3 +20,4 @@ func main() {
 	call(registryAddr)
 	broadcast(registryAddr)
 }
+```
